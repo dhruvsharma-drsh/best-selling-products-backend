@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "render:build": "node scripts/install-playwright-chromium.mjs && npx prisma generate && npx prisma db push && npm run build",
     "start": "node dist/index.js",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
