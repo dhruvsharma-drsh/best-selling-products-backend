@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  asin            String
+  country         String   @default("US")
+  title           String
+  brand           String?
+  imageUrl        String?  @map("image_url")
+  productUrl      String   @map("product_url")
+  primaryCategory String   @map("primary_category")
+  subcategory     String?
+  priceUsd        Decimal? @map("price_usd") @db.Decimal(10, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  snapshots BsrSnapshot[]
+
+  @@id([asin, country])
+  @@map("products")
+}
+
+model BsrSnapshot {
+  time                    DateTime @db.Timestamptz
+  asin                    String
+  country                 String   @default("US")
+  bsrOverall              Int?     @map("bsr_overall")
+  bsrCategory             Int      @map("bsr_category")
+  category                String
+  reviewCount             Int?     @map("review_count")
+  rating                  Decimal? @db.Decimal(3, 2)
+  priceUsd                Decimal? @map("price_usd") @db.Decimal(10, 2)
+  estimatedMonthlySales   Int?     @map("estimated_monthly_sales")
+  estimatedMonthlyRevenue Decimal? @map("estimated_monthly_revenue") @db.Decimal(12, 2)
+
+  product Product @relation(fields: [asin, country], references: [asin, country])
+
+  @@id([time, asin, country])
+  @@map("bsr_snapshots")
+}
+
+model CategoryCurve {
+  category               String   @id
+  displayName            String   @map("display_name")
+  amazonUrl              String   @map("amazon_url")
+  referencePoints        Json     @map("reference_points")
+  totalProductsEstimate  Int?     @map("total_products_estimate")
+  lastCalibrated         DateTime @default(now()) @map("last_calibrated")
+
+  @@map("category_curves")
+}
+
+model ScrapeJob {
+  id            Int       @id @default(autoincrement())
+  jobType       String    @map("job_type")
+  categoryUrl   String?   @map("category_url")
+  country       String    @default("US")
+  status        String    @default("pending")
+  productsFound Int       @default(0) @map("products_found")
+  errorMessage  String?   @map("error_message")
+  startedAt     DateTime? @map("started_at")
+  completedAt   DateTime? @map("completed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@map("scrape_jobs")
+}
+
+model CalibrationData {
+  id                Int      @id @default(autoincrement())
+  asin              String
+  country           String   @default("US")
+  category          String
+  actualMonthlySales Int     @map("actual_monthly_sales")
+  reportedAt        DateTime @map("reported_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("calibration_data")
+}
+
+model ArchiveSnapshot {
+  id              Int       @id @default(autoincrement())
+  asin            String
+  productName     String    @map("product_name")
+  rank            Int
+  category        String
+  snapshotDate    DateTime  @map("snapshot_date") @db.Date
+  archiveUrl      String    @map("archive_url")
+  rating          Decimal?  @db.Decimal(3, 2)
+  reviewCount     Int?      @map("review_count")
+  imageUrl        String?   @map("image_url")
+  importedAt      DateTime  @default(now()) @map("imported_at")
+
+  @@unique([asin, category, snapshotDate])
+  @@index([category, snapshotDate])
+  @@index([snapshotDate])
+  @@map("archive_snapshots")
+}
+
+model ArchiveImportJob {
+  id            Int       @id @default(autoincrement())
+  archiveUrl    String    @map("archive_url")
+  category      String
+  snapshotDate  DateTime  @map("snapshot_date") @db.Date
+  status        String    @default("pending")
+  productsFound Int       @default(0) @map("products_found")
+  errorMessage  String?   @map("error_message")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  completedAt   DateTime? @map("completed_at")
+
+  @@map("archive_import_jobs")
+}

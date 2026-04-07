@@ -1,0 +1,33 @@
+# dependencies
+/node_modules/
+
+# build outputs
+/dist/
+/coverage/
+*.tsbuildinfo
+/src/**/*.js
+/src/**/*.js.map
+
+# environment files
+/.env
+/.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# test and browser artifacts
+/playwright-report/
+/test-results/
+
+# local diagnostic outputs
+/build.txt
+/clean-results.json
+/output.json
+/verify_results.txt
+/*-report.txt
+/*-results.txt
