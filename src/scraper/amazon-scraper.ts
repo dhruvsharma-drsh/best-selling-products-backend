@@ -39,6 +39,7 @@ export const COUNTRY_DOMAINS: Record<string, string> = {
   IN: 'amazon.in',
   JP: 'amazon.co.jp',
   AU: 'amazon.com.au',
+  AE: 'amazon.ae',
 };
 
 // Country-specific Accept-Language headers to avoid geo-redirect issues
@@ -53,6 +54,7 @@ const COUNTRY_LANG: Record<string, string> = {
   IN: 'en-IN,en;q=0.9',
   JP: 'ja-JP,ja;q=0.9,en;q=0.5',
   AU: 'en-AU,en;q=0.9',
+  AE: 'en-AE,ar;q=0.9,en;q=0.5',
 };
 
 /**
@@ -75,81 +77,107 @@ const COUNTRY_CATEGORY_PATHS: Record<string, Record<string, string>> = {
     US: 'electronics', UK: 'electronics', CA: 'electronics',
     DE: 'ce-de', FR: 'electronics', IT: 'electronics',
     ES: 'electronics', IN: 'electronics', JP: 'electronics', AU: 'electronics',
+    AE: 'electronics',
   },
   kitchen: {
     US: 'kitchen', UK: 'kitchen', CA: 'kitchen',
     DE: 'kitchen', FR: 'kitchen', IT: 'kitchen',
     ES: 'kitchen', IN: 'kitchen', JP: 'kitchen', AU: 'kitchen',
+    AE: 'kitchen',
   },
   beauty: {
     US: 'beauty', UK: 'beauty', CA: 'beauty',
     DE: 'beauty', FR: 'beauty', IT: 'beauty',
     ES: 'beauty', IN: 'beauty', JP: 'beauty', AU: 'beauty',
+    AE: 'beauty',
   },
   toys: {
     US: 'toys-and-games', UK: 'toys', CA: 'toys',
     DE: 'toys', FR: 'toys', IT: 'toys',
     ES: 'toys', IN: 'toys', JP: 'toys', AU: 'toys',
+    AE: 'toys',
   },
   sports: {
     US: 'sporting-goods', UK: 'sports', CA: 'sports',
     DE: 'sports', FR: 'sports', IT: 'sports',
     ES: 'sports', IN: 'sports', JP: 'sports', AU: 'sports',
+    AE: 'sporting-goods',
   },
   clothing: {
     US: 'fashion', UK: 'fashion', CA: 'fashion',
     DE: 'fashion', FR: 'fashion', IT: 'fashion',
     ES: 'fashion', IN: 'fashion', JP: 'fashion', AU: 'fashion',
+    AE: 'fashion',
   },
   health: {
     US: 'hpc', UK: 'drugstore', CA: 'hpc',
     DE: 'drugstore', FR: 'hpc', IT: 'hpc',
     ES: 'hpc', IN: 'hpc', JP: 'hpc', AU: 'hpc',
+    AE: 'health',
   },
   home: {
     US: 'home-garden', UK: 'home-garden', CA: 'kitchen',
     DE: 'kitchen', FR: 'kitchen', IT: 'kitchen',
     ES: 'kitchen', IN: 'kitchen', JP: 'kitchen', AU: 'home',
+    AE: 'home',
   },
   books: {
     US: 'books', UK: 'books', CA: 'books',
     DE: 'books', FR: 'books', IT: 'books',
     ES: 'books', IN: 'books', JP: 'books', AU: 'books',
+    AE: 'books',
   },
   grocery: {
     US: 'grocery', UK: 'grocery', CA: 'grocery',
     DE: 'grocery', FR: 'grocery', IT: 'grocery',
     ES: 'grocery', IN: 'grocery', JP: 'food-beverage', AU: 'pantry',
+    AE: 'grocery',
   },
   office: {
     US: 'office-products', UK: 'office-products', CA: 'office',
     DE: 'office-products', FR: 'office-products', IT: 'office',
     ES: 'office', IN: 'office', JP: 'office-products', AU: 'office-products',
+    AE: 'office-products',
   },
   petSupplies: {
     US: 'pet-supplies', UK: 'pet-supplies', CA: 'pet-supplies',
     DE: 'pet-supplies', FR: 'pet-supplies', IT: 'pet-supplies',
     ES: 'pet-supplies', IN: 'pet-supplies', JP: 'pet-supplies', AU: 'pets',
+    AE: 'pet-supplies',
   },
   automotive: {
     US: 'automotive', UK: 'automotive', CA: 'automotive',
     DE: 'automotive', FR: 'automotive', IT: 'automotive',
     ES: 'automotive', IN: 'car-motorbike', JP: 'automotive', AU: 'automotive',
+    AE: 'automotive',
   },
   baby: {
     US: 'baby-products', UK: 'baby', CA: 'baby',
     DE: 'baby', FR: 'baby', IT: 'baby',
     ES: 'baby', IN: 'baby', JP: 'baby', AU: 'baby',
+    AE: 'baby-products',
   },
   tools: {
     US: 'hi', UK: 'diy', CA: 'hi',
     DE: 'diy', FR: 'diy', IT: 'diy',
     ES: 'diy', IN: 'home-improvement', JP: 'diy', AU: 'home-improvement',
+    AE: 'home-improvement',
   },
   videogames: {
     US: 'videogames', UK: 'videogames', CA: 'videogames',
     DE: 'videogames', FR: 'videogames', IT: 'videogames',
     ES: 'videogames', IN: 'videogames', JP: 'videogames', AU: 'videogames',
+    AE: 'videogames',
+  },
+};
+
+const COUNTRY_CATEGORY_PATH_ALIASES: Record<string, Record<string, string[]>> = {
+  AE: {
+    sports: ['sports'],
+    health: ['hpc'],
+    home: ['home-garden'],
+    baby: ['baby'],
+    tools: ['hi'],
   },
 };
 
@@ -216,16 +244,28 @@ export class AmazonScraper {
     const config = CATEGORY_CURVES[categoryKey];
     const nodeId = config?.amazonNodeId;
     const urls: string[] = [];
+    const seenPaths = new Set<string>();
+    const addPathUrl = (path: string) => {
+      if (!path || seenPaths.has(path)) return;
+      seenPaths.add(path);
+
+      if (pageNum === 1) {
+        urls.push(`https://www.${tld}/gp/bestsellers/${path}/`);
+      } else {
+        urls.push(`https://www.${tld}/gp/bestsellers/${path}/ref=zg_bs_pg_${pageNum}?ie=UTF8&pg=${pageNum}`);
+      }
+    };
 
     // Strategy 1: Country-specific bestseller path (most reliable)
     const countryPaths = COUNTRY_CATEGORY_PATHS[categoryKey];
     const countryPath = countryPaths?.[country];
     if (countryPath) {
-      if (pageNum === 1) {
-        urls.push(`https://www.${tld}/gp/bestsellers/${countryPath}/`);
-      } else {
-        urls.push(`https://www.${tld}/gp/bestsellers/${countryPath}/ref=zg_bs_pg_${pageNum}?ie=UTF8&pg=${pageNum}`);
-      }
+      addPathUrl(countryPath);
+    }
+
+    const countryAliases = COUNTRY_CATEGORY_PATH_ALIASES[country]?.[categoryKey] ?? [];
+    for (const alias of countryAliases) {
+      addPathUrl(alias);
     }
 
     // Strategy 2: US-derived zgbs path (works for US, sometimes for other English-speaking countries)
@@ -239,11 +279,7 @@ export class AmazonScraper {
 
     // Strategy 3: Try the category key itself as a slug (works surprisingly often)
     if (categoryKey !== countryPath) {
-      if (pageNum === 1) {
-        urls.push(`https://www.${tld}/gp/bestsellers/${categoryKey}/`);
-      } else {
-        urls.push(`https://www.${tld}/gp/bestsellers/${categoryKey}/ref=zg_bs_pg_${pageNum}?ie=UTF8&pg=${pageNum}`);
-      }
+      addPathUrl(categoryKey);
     }
 
     // Strategy 4: Node ID based URL (works only on the intended domain, typically US)
@@ -262,11 +298,7 @@ export class AmazonScraper {
       if (zgbsMatch) {
         const usPath = zgbsMatch[1].replace(/\/$/, '');
         if (usPath !== countryPath && usPath !== categoryKey) {
-          if (pageNum === 1) {
-            urls.push(`https://www.${tld}/gp/bestsellers/${usPath}/`);
-          } else {
-            urls.push(`https://www.${tld}/gp/bestsellers/${usPath}/ref=zg_bs_pg_${pageNum}?ie=UTF8&pg=${pageNum}`);
-          }
+          addPathUrl(usPath);
         }
       }
     }
