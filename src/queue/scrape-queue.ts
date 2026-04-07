@@ -1,4 +1,4 @@
-import '../config/env.js';
+import { config } from '../config/env.js';
 import { Queue, Worker, Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { AmazonScraper, ScrapeCancelledError } from '../scraper/amazon-scraper.js';
@@ -6,19 +6,16 @@ import { estimateMonthlySales } from '../estimation/sales-estimator.js';
 import { PrismaClient } from '@prisma/client';
 import { CATEGORY_KEYS } from '../estimation/category-curves.js';
 
-const redisUrl = process.env.REDIS_URL;
-const useTls = process.env.REDIS_TLS === 'true';
-
-const connection = redisUrl
-  ? new Redis(redisUrl, {
+const connection = config.redis.url
+  ? new Redis(config.redis.url, {
       maxRetriesPerRequest: null,
     })
   : new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      password: process.env.REDIS_PASSWORD || undefined,
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password,
       maxRetriesPerRequest: null,
-      ...(useTls ? { tls: {} } : {}),
+      ...(config.redis.tls ? { tls: {} } : {}),
     });
 
 const BULK_QUEUE_NAME = 'amazon-scrape-bulk-v2';

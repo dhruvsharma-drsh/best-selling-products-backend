@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { registerProductRoutes } from './routes/products.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerArchiveRoutes } from './routes/archive.js';
+import { config } from '../config/env.js';
 import {
   stopScrapes,
   triggerAllScrapes,
@@ -15,18 +16,14 @@ export async function createServer() {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const configuredOrigins = process.env.CORS_ORIGIN?.split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean) ?? [];
-  const allowUnconfiguredOrigins = !isProduction && configuredOrigins.length === 0;
-  const allowAllOrigins = configuredOrigins.includes('*');
+  const allowUnconfiguredOrigins = !config.isProduction && config.cors.origins.length === 0;
+  const allowAllOrigins = config.cors.origins.includes('*');
   const allowedOrigins = new Set(
-    configuredOrigins.filter((origin) => origin !== '*')
+    config.cors.origins.filter((origin) => origin !== '*')
   );
 
   const app = Fastify({
-    logger: isProduction
+    logger: config.isProduction
       ? { level: 'info' }
       : {
           level: 'info',

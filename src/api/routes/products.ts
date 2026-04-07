@@ -6,6 +6,7 @@ import {
   calculateTrend,
 } from '../../estimation/sales-estimator.js';
 import { CATEGORY_CURVES } from '../../estimation/category-curves.js';
+import { convertToUsd, getCountryCurrency } from '../../lib/currency-rates.js';
 
 interface SnapshotRow {
   time: Date;
@@ -287,6 +288,9 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
           )
         : null;
 
+      const rawPrice = product.priceUsd ? parseFloat(product.priceUsd.toString()) : null;
+      const currencyInfo = getCountryCurrency(country);
+
       return {
         product: {
           asin: product.asin,
@@ -295,7 +299,9 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
           imageUrl: product.imageUrl,
           productUrl: product.productUrl,
           category: product.primaryCategory,
-          priceUsd: product.priceUsd ? parseFloat(product.priceUsd.toString()) : null,
+          priceLocal: rawPrice,
+          priceUsd: rawPrice != null ? convertToUsd(rawPrice, country) : null,
+          priceCurrency: { code: currencyInfo.code, symbol: currencyInfo.symbol },
         },
         analytics: {
           currentBsr: latestSnapshot?.bsr_category,
@@ -433,10 +439,14 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
 }
 
 function formatProduct(raw: any) {
+  const rawPrice = raw.price_usd ? parseFloat(raw.price_usd) : null;
+  const country = raw.country || 'US';
+  const currencyInfo = getCountryCurrency(country);
+
   return {
     rank: parseInt(raw.rank),
     asin: raw.asin,
-    country: raw.country,
+    country,
     title: raw.title,
     brand: raw.brand,
     imageUrl: raw.image_url,
@@ -447,7 +457,9 @@ function formatProduct(raw: any) {
     estimatedMonthlyRevenue: raw.estimated_monthly_revenue
       ? parseFloat(raw.estimated_monthly_revenue)
       : null,
-    priceUsd: raw.price_usd ? parseFloat(raw.price_usd) : null,
+    priceLocal: rawPrice,
+    priceUsd: rawPrice != null ? convertToUsd(rawPrice, country) : null,
+    priceCurrency: { code: currencyInfo.code, symbol: currencyInfo.symbol },
     rating: raw.rating ? parseFloat(raw.rating) : null,
     reviewCount: raw.review_count,
     lastUpdated: raw.time,

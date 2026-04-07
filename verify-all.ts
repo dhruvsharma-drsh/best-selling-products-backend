@@ -2,7 +2,7 @@
 
 const COUNTRY_CATEGORY_PATHS: Record<string, Record<string, string>> = {
   electronics: {
-    US: 'electronics', UK: 'electronics', CA: 'electronics',
+    US: 'electronics', UK: 'electronicswa', CA: 'electronics',
     DE: 'ce-de', FR: 'electronics', IT: 'electronics',
     ES: 'electronics', IN: 'electronics', JP: 'electronics', AU: 'electronics',
   },

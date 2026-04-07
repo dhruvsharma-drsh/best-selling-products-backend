@@ -26,17 +26,7 @@ async function main() {
   const realtimeWorker = attachWorkerLogging('realtime');
   const bulkWorker = attachWorkerLogging('bulk');
 
-  const port = parseInt(process.env.PORT || '3001');
-  const publicBaseUrl = (() => {
-    const configuredUrl = process.env.PUBLIC_BASE_URL?.trim();
-    if (!configuredUrl) return '';
-
-    const withProtocol = /^https?:\/\//i.test(configuredUrl)
-      ? configuredUrl
-      : `https://${configuredUrl}`;
-
-    return withProtocol.replace(/\/$/, '');
-  })();
+  const { port, publicBaseUrl } = (await import('./config/env.js')).config;
   const formatEndpoint = (path: string) =>
     publicBaseUrl ? `${publicBaseUrl}${path}` : path;
 
