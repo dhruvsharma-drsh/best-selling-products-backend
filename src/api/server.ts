@@ -19,12 +19,11 @@ export async function createServer() {
   const configuredOrigins = process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean) ?? [];
+  const allowUnconfiguredOrigins = !isProduction && configuredOrigins.length === 0;
   const allowAllOrigins = configuredOrigins.includes('*');
-  const allowedOrigins = new Set([
-    'http://localhost:3000',
-    'http://localhost:3001',
-    ...configuredOrigins.filter((origin) => origin !== '*'),
-  ]);
+  const allowedOrigins = new Set(
+    configuredOrigins.filter((origin) => origin !== '*')
+  );
 
   const app = Fastify({
     logger: isProduction
@@ -44,7 +43,12 @@ export async function createServer() {
   // CORS for frontend
   await app.register(cors, {
     origin: (origin, callback) => {
-      if (!origin || allowAllOrigins || allowedOrigins.has(origin)) {
+      if (
+        !origin ||
+        allowUnconfiguredOrigins ||
+        allowAllOrigins ||
+        allowedOrigins.has(origin)
+      ) {
         callback(null, true);
         return;
       }
@@ -54,12 +58,27 @@ export async function createServer() {
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   });
 
-  // Health check
-  app.get('/api/health', async () => ({
+  const getHealthPayload = () => ({
     status: 'ok',
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+  });
+
+  app.get('/', async () => ({
+    name: 'Amazon Sales Intelligence Platform',
+    status: 'ok',
+    endpoints: {
+      health: '/health',
+      apiHealth: '/api/health',
+      products: '/api/products',
+      topProducts: '/api/products/top',
+      stats: '/api/stats',
+      categories: '/api/categories',
+    },
   }));
+
+  app.get('/health', async () => getHealthPayload());
+  app.get('/api/health', async () => getHealthPayload());
 
   // Register product routes
   registerProductRoutes(app, prisma);

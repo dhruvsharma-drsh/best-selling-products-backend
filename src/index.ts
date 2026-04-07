@@ -27,19 +27,26 @@ async function main() {
   const bulkWorker = attachWorkerLogging('bulk');
 
   const port = parseInt(process.env.PORT || '3001');
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL?.trim().replace(/\/$/, '');
+  const formatEndpoint = (path: string) =>
+    publicBaseUrl ? `${publicBaseUrl}${path}` : path;
+
   await app.listen({ port, host: '0.0.0.0' });
 
   console.log('\n' + '='.repeat(58));
   console.log('  Amazon Sales Intelligence Platform');
-  console.log(`  API Server:      http://localhost:${port}`);
-  console.log(`  Health:          http://localhost:${port}/api/health`);
-  console.log(`  Products:        http://localhost:${port}/api/products`);
-  console.log(`  Top Products:    http://localhost:${port}/api/products/top`);
-  console.log(`  Stats:           http://localhost:${port}/api/stats`);
-  console.log(`  Categories:      http://localhost:${port}/api/categories`);
-  console.log(`  Admin Curves:    http://localhost:${port}/api/admin/category-curves`);
-  console.log(`  Admin Calibrate: http://localhost:${port}/api/admin/calibration`);
-  console.log(`  Scrape Stats:    http://localhost:${port}/api/admin/scrape-jobs/stats`);
+  console.log(`  Port:            ${port}`);
+  console.log(`  Base URL:        ${publicBaseUrl || 'set PUBLIC_BASE_URL to show a public URL'}`);
+  console.log(`  Root:            ${formatEndpoint('/')}`);
+  console.log(`  Health:          ${formatEndpoint('/health')}`);
+  console.log(`  API Health:      ${formatEndpoint('/api/health')}`);
+  console.log(`  Products:        ${formatEndpoint('/api/products')}`);
+  console.log(`  Top Products:    ${formatEndpoint('/api/products/top')}`);
+  console.log(`  Stats:           ${formatEndpoint('/api/stats')}`);
+  console.log(`  Categories:      ${formatEndpoint('/api/categories')}`);
+  console.log(`  Admin Curves:    ${formatEndpoint('/api/admin/category-curves')}`);
+  console.log(`  Admin Calibrate: ${formatEndpoint('/api/admin/calibration')}`);
+  console.log(`  Scrape Stats:    ${formatEndpoint('/api/admin/scrape-jobs/stats')}`);
   console.log('='.repeat(58) + '\n');
 
   const shutdown = async () => {
