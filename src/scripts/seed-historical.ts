@@ -1,10 +1,4 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-// Load .env from project root (monorepo root)
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
+import '../config/env.js';
 import { PrismaClient } from '@prisma/client';
 import { CATEGORY_CURVES } from '../estimation/category-curves.js';
 import { estimateMonthlySales } from '../estimation/sales-estimator.js';

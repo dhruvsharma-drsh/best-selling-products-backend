@@ -1,30 +1,28 @@
+import fs from 'fs';
 import { AmazonScraper } from '../scraper/amazon-scraper.js';
 import { CATEGORY_KEYS, CATEGORY_CURVES } from '../estimation/category-curves.js';
-import fs from 'fs';
+
+type CategoryKey = keyof typeof CATEGORY_CURVES;
 
 async function testAll() {
   const scraper = new AmazonScraper();
   await scraper.init();
-  
-  const results = {};
-  
+
+  const results: Partial<Record<CategoryKey, string>> = {};
+
   for (const cat of CATEGORY_KEYS) {
     try {
       const products = await scraper.scrapeBestSellersCategory(cat, 'JP', 60);
-      if (products.length > 0) {
-        results[cat] = 'SUCCESS (' + products.length + ')';
-      } else {
-        results[cat] = 'FAILED';
-      }
+      results[cat] = products.length > 0 ? `SUCCESS (${products.length})` : 'FAILED';
     } catch (err) {
-      results[cat] = 'ERROR: ' + err.message;
+      const message = err instanceof Error ? err.message : String(err);
+      results[cat] = `ERROR: ${message}`;
     }
   }
-  
+
   await scraper.close();
-  
+
   fs.writeFileSync('clean-results.json', JSON.stringify(results, null, 2), 'utf-8');
-  process.exit(0);
 }
 
 testAll().catch(console.error);

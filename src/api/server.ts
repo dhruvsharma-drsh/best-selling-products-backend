@@ -15,25 +15,42 @@ export async function createServer() {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
+  const isProduction = process.env.NODE_ENV === 'production';
+  const configuredOrigins = process.env.CORS_ORIGIN?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean) ?? [];
+  const allowAllOrigins = configuredOrigins.includes('*');
+  const allowedOrigins = new Set([
+    'http://localhost:3000',
+    'http://localhost:3001',
+    ...configuredOrigins.filter((origin) => origin !== '*'),
+  ]);
+
   const app = Fastify({
-    logger: {
-      level: 'info',
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
+    logger: isProduction
+      ? { level: 'info' }
+      : {
+          level: 'info',
+          transport: {
+            target: 'pino-pretty',
+            options: {
+              translateTime: 'HH:MM:ss Z',
+              ignore: 'pid,hostname',
+            },
+          },
         },
-      },
-    },
   });
 
   // CORS for frontend
   await app.register(cors, {
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3001',
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowAllOrigins || allowedOrigins.has(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} not allowed by CORS`), false);
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   });
 

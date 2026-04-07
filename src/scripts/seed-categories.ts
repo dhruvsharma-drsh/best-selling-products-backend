@@ -1,10 +1,5 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
-import { PrismaClient } from '@prisma/client';
+import '../config/env.js';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { CATEGORY_CURVES } from '../estimation/category-curves.js';
 
 /**
@@ -24,13 +19,13 @@ async function seedCategories() {
           category: key,
           displayName: config.displayName,
           amazonUrl: config.amazonUrl,
-          referencePoints: config.referencePoints,
+          referencePoints: config.referencePoints as unknown as Prisma.InputJsonValue,
           totalProductsEstimate: config.totalProductsEstimate,
         },
         update: {
           displayName: config.displayName,
           amazonUrl: config.amazonUrl,
-          referencePoints: config.referencePoints,
+          referencePoints: config.referencePoints as unknown as Prisma.InputJsonValue,
           totalProductsEstimate: config.totalProductsEstimate,
           lastCalibrated: new Date(),
         },
