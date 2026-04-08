@@ -26,6 +26,7 @@ export async function createServer() {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
+  const normalizeOrigin = (origin: string) => origin.replace(/\/$/, '');
   const allowUnconfiguredOrigins = !config.isProduction && config.cors.origins.length === 0;
   const allowAllOrigins = config.cors.origins.includes('*');
   const allowedOrigins = new Set(
@@ -50,17 +51,19 @@ export async function createServer() {
   // CORS for frontend
   await app.register(cors, {
     origin: (origin, callback) => {
+      const normalizedOrigin = origin ? normalizeOrigin(origin) : origin;
+
       if (
-        !origin ||
+        !normalizedOrigin ||
         allowUnconfiguredOrigins ||
         allowAllOrigins ||
-        allowedOrigins.has(origin)
+        allowedOrigins.has(normalizedOrigin)
       ) {
         callback(null, true);
         return;
       }
 
-      callback(new Error(`Origin ${origin} not allowed by CORS`), false);
+      callback(new Error(`Origin ${normalizedOrigin} not allowed by CORS`), false);
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   });

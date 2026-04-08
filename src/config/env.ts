@@ -21,6 +21,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function normalizeCorsOrigin(origin: string): string {
+  const trimmed = origin.trim();
+
+  if (!trimmed || trimmed === '*') {
+    return trimmed;
+  }
+
+  return trimmed.replace(/\/$/, '');
+}
+
 export const config = {
   /** Current environment */
   env: (process.env.NODE_ENV || 'development') as 'development' | 'staging' | 'production',
@@ -55,7 +65,7 @@ export const config = {
   cors: {
     origins: (process.env.CORS_ORIGIN || '')
       .split(',')
-      .map((o) => o.trim())
+      .map(normalizeCorsOrigin)
       .filter(Boolean),
   },
 
