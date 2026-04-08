@@ -146,7 +146,7 @@ export const CATEGORY_CURVES: Record<string, CategoryConfig> = {
   },
 
   clothing: {
-    displayName: "Clothing, Shoes & Jewelry",
+    displayName: "Clothing, Shoes & Accessories",
     amazonUrl: "https://www.amazon.com/Best-Sellers-Clothing-Shoes-Jewelry/zgbs/fashion/",
     amazonNodeId: "7141123011",
     totalProductsEstimate: 25000000,
