@@ -6,13 +6,18 @@ import {
   calculateTrend,
 } from '../../estimation/sales-estimator.js';
 import { CATEGORY_CURVES } from '../../estimation/category-curves.js';
-import { convertToUsd, getCountryCurrency } from '../../lib/currency-rates.js';
+import {
+  convertLocalToUsdDetailed,
+  convertUsdToLocalDetailed,
+  getCountryCurrency,
+} from '../../lib/currency-rates.js';
 
 interface SnapshotRow {
   time: Date;
   bsr_category: number;
   estimated_monthly_sales: number | null;
   estimated_monthly_revenue: string | null;
+  price_local: string | null;
   price_usd: string | null;
   rating: string | null;
   review_count: number | null;
@@ -26,6 +31,7 @@ interface ProductRecord {
   productUrl: string;
   primaryCategory: string;
   subcategory: string | null;
+  priceLocal: { toString(): string } | null;
   priceUsd: { toString(): string } | null;
   createdAt: Date;
   updatedAt: Date;
@@ -40,6 +46,26 @@ export interface ProductQueryParams {
   page?: number;
   sortBy?: 'estimated_sales' | 'bsr' | 'revenue';
   search?: string;
+}
+
+function parseNullableDecimal(value: { toString(): string } | string | null | undefined): number | null {
+  if (value == null) return null;
+  const parsed = parseFloat(value.toString());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function findLatestHistoryPrice(
+  history: SnapshotRow[],
+  field: 'price_local' | 'price_usd'
+): number | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const parsed = parseNullableDecimal(history[index]?.[field]);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient) {
@@ -112,6 +138,7 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
         productUrl: p.productUrl,
         category: p.primaryCategory,
         subcategory: p.subcategory,
+        priceLocal: p.priceLocal ? parseFloat(p.priceLocal.toString()) : null,
         priceUsd: p.priceUsd ? parseFloat(p.priceUsd.toString()) : null,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
@@ -192,6 +219,7 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
               s.estimated_monthly_revenue,
               s.review_count,
               s.rating,
+              s.price_local,
               s.price_usd,
               s.time
             FROM bsr_snapshots s
@@ -262,6 +290,7 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
           bsr_category,
           estimated_monthly_sales,
           estimated_monthly_revenue,
+          price_local,
           price_usd,
           rating,
           review_count
@@ -280,16 +309,112 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
       const trend = calculateTrend(recentBsr, olderBsr);
 
       const latestSnapshot = history[history.length - 1];
+      const rawLocalPrice = parseNullableDecimal(product.priceLocal);
+      const rawUsdPrice = parseNullableDecimal(product.priceUsd);
+      const latestSnapshotLocalPrice = parseNullableDecimal(latestSnapshot?.price_local);
+      const latestSnapshotUsdPrice = parseNullableDecimal(latestSnapshot?.price_usd);
+      const latestAvailableLocalPrice = latestSnapshotLocalPrice ?? findLatestHistoryPrice(history, 'price_local');
+      const latestAvailableUsdPrice = latestSnapshotUsdPrice ?? findLatestHistoryPrice(history, 'price_usd');
+      let displayLocalPrice =
+        rawLocalPrice ??
+        latestAvailableLocalPrice ??
+        (country === 'US' ? rawUsdPrice ?? latestAvailableUsdPrice : null);
+      const currencyInfo = getCountryCurrency(country);
+      let displayUsdPrice = rawUsdPrice ?? latestAvailableUsdPrice;
+      let priceConversion: {
+        usdStatus: 'available' | 'unavailable';
+        usdSource: 'stored_product' | 'stored_snapshot' | 'live_api' | 'missing_price' | 'conversion_error';
+        exchangeRate: number | null;
+        message: string | null;
+      } = displayUsdPrice != null
+        ? {
+            usdStatus: 'available',
+            usdSource: rawUsdPrice != null ? 'stored_product' : 'stored_snapshot',
+            exchangeRate: null,
+            message: null,
+          }
+        : {
+            usdStatus: 'unavailable',
+            usdSource: displayLocalPrice == null ? 'missing_price' : 'conversion_error',
+            exchangeRate: null,
+            message: displayLocalPrice == null ? 'Local price is unavailable for this product.' : null,
+          };
+
+      if (displayUsdPrice == null && displayLocalPrice != null) {
+        try {
+          const conversion = await convertLocalToUsdDetailed(displayLocalPrice, country);
+          if (conversion.amount != null) {
+            displayUsdPrice = conversion.amount;
+            priceConversion = {
+              usdStatus: 'available',
+              usdSource: 'live_api',
+              exchangeRate: conversion.rate,
+              message: null,
+            };
+
+            const updateData: Record<string, number> = {};
+            if (rawLocalPrice == null) {
+              updateData.priceLocal = displayLocalPrice;
+            }
+            if (rawUsdPrice == null) {
+              updateData.priceUsd = conversion.amount;
+            }
+
+            if (Object.keys(updateData).length > 0) {
+              await prisma.product.update({
+                where: {
+                  asin_country: { asin, country },
+                },
+                data: updateData,
+              }).catch((err) => {
+                console.warn(`Failed to cache converted price for ${asin}/${country}:`, err);
+              });
+            }
+          } else {
+            priceConversion = {
+              usdStatus: 'unavailable',
+              usdSource: 'conversion_error',
+              exchangeRate: null,
+              message: 'USD conversion did not return a price.',
+            };
+          }
+        } catch (error) {
+          const rawMessage = error instanceof Error ? error.message : 'USD conversion failed.';
+          const message = rawMessage.includes('CURRENCY_API_URL')
+            ? 'USD conversion is unavailable until the currency API is configured in the backend environment.'
+            : rawMessage.includes('USD rate')
+              ? 'The currency API response did not include a USD exchange rate.'
+              : rawMessage;
+          priceConversion = {
+            usdStatus: 'unavailable',
+            usdSource: 'conversion_error',
+            exchangeRate: null,
+            message,
+          };
+        }
+      }
+
+      if (displayLocalPrice == null && displayUsdPrice != null && currencyInfo.code !== 'USD') {
+        try {
+          const reverseConversion = await convertUsdToLocalDetailed(displayUsdPrice, country);
+          if (reverseConversion.amount != null) {
+            displayLocalPrice = reverseConversion.amount;
+          }
+        } catch (error) {
+          console.warn(
+            `Failed to derive local price from USD for ${asin}/${country}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
+
       const currentEstimate = latestSnapshot
         ? estimateMonthlySales(
             latestSnapshot.bsr_category,
             product.primaryCategory,
-            latestSnapshot.price_usd ? parseFloat(latestSnapshot.price_usd) : undefined
+            latestSnapshotUsdPrice ?? displayUsdPrice ?? undefined
           )
         : null;
-
-      const rawPrice = product.priceUsd ? parseFloat(product.priceUsd.toString()) : null;
-      const currencyInfo = getCountryCurrency(country);
 
       return {
         product: {
@@ -299,9 +424,14 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
           imageUrl: product.imageUrl,
           productUrl: product.productUrl,
           category: product.primaryCategory,
-          priceLocal: rawPrice,
-          priceUsd: rawPrice != null ? convertToUsd(rawPrice, country) : null,
-          priceCurrency: { code: currencyInfo.code, symbol: currencyInfo.symbol },
+          priceLocal: displayLocalPrice,
+          priceUsd: displayUsdPrice,
+          priceCurrency: {
+            code: currencyInfo.code,
+            symbol: currencyInfo.symbol,
+            locale: currencyInfo.locale,
+          },
+          priceConversion,
         },
         analytics: {
           currentBsr: latestSnapshot?.bsr_category,
@@ -439,7 +569,8 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
 }
 
 function formatProduct(raw: any) {
-  const rawPrice = raw.price_usd ? parseFloat(raw.price_usd) : null;
+  const rawLocalPrice = raw.price_local ? parseFloat(raw.price_local) : null;
+  const rawUsdPrice = raw.price_usd ? parseFloat(raw.price_usd) : null;
   const country = raw.country || 'US';
   const currencyInfo = getCountryCurrency(country);
 
@@ -457,9 +588,13 @@ function formatProduct(raw: any) {
     estimatedMonthlyRevenue: raw.estimated_monthly_revenue
       ? parseFloat(raw.estimated_monthly_revenue)
       : null,
-    priceLocal: rawPrice,
-    priceUsd: rawPrice != null ? convertToUsd(rawPrice, country) : null,
-    priceCurrency: { code: currencyInfo.code, symbol: currencyInfo.symbol },
+    priceLocal: rawLocalPrice,
+    priceUsd: rawUsdPrice,
+    priceCurrency: {
+      code: currencyInfo.code,
+      symbol: currencyInfo.symbol,
+      locale: currencyInfo.locale,
+    },
     rating: raw.rating ? parseFloat(raw.rating) : null,
     reviewCount: raw.review_count,
     lastUpdated: raw.time,

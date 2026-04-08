@@ -5,12 +5,22 @@ import { registerProductRoutes } from './routes/products.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerArchiveRoutes } from './routes/archive.js';
 import { config } from '../config/env.js';
+import { CATEGORY_KEYS } from '../estimation/category-curves.js';
 import {
+  resetBulkScrapes,
   stopScrapes,
+  triggerAllCountriesScrapes,
   triggerAllScrapes,
   triggerCategoryScrape,
   scheduleAllCategories,
 } from '../queue/scrape-queue.js';
+import { SUPPORTED_COUNTRIES } from '../scraper/amazon-scraper.js';
+import {
+  DEFAULT_PRODUCT_LIMIT,
+  normalizeProductLimit,
+  PRODUCT_LIMIT_OPTIONS,
+  SUPPORTED_COUNTRY_CONFIGS,
+} from '../config/sync-config.js';
 
 export async function createServer() {
   const prisma = new PrismaClient();
@@ -87,12 +97,55 @@ export async function createServer() {
   registerArchiveRoutes(app, prisma);
 
   // Admin: trigger scrape of all categories
-  app.post<{ Querystring: { country?: string } }>('/api/admin/scrape/all', async (request) => {
+  app.post<{ Querystring: { country?: string; limit?: number } }>('/api/admin/scrape/all', async (request) => {
     const { country = 'US' } = request.query;
-    const jobIds = await triggerAllScrapes(country);
+    const productLimit = normalizeProductLimit(request.query.limit);
+    const reset = await resetBulkScrapes();
+    const jobIds = await triggerAllScrapes(country, productLimit);
     return {
       success: true,
       message: `Triggered scrape for all categories in ${country}`,
+      productLimit,
+      replacedActiveJobId: reset.activeJobId,
+      removedWaitingJobs: reset.removedWaitingJobs,
+      jobIds,
+    };
+  });
+
+  // Admin: trigger scrape of all countries and all categories
+  app.post<{ Querystring: { country?: string; countries?: string; limit?: number; scope?: 'all' | 'selected' } }>('/api/admin/scrape/world', async (request) => {
+    const normalizedCountry = (request.query.country || 'US').trim().toUpperCase();
+    const selectedCountries = (request.query.countries ?? '')
+      .split(',')
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean);
+    const includeRemainingCountries = request.query.scope !== 'selected';
+    const productLimit = normalizeProductLimit(request.query.limit);
+    const startedAt = new Date().toISOString();
+    const reset = await resetBulkScrapes();
+    const jobIds = await triggerAllCountriesScrapes(
+      normalizedCountry,
+      productLimit,
+      selectedCountries,
+      includeRemainingCountries
+    );
+    const effectiveCountryCount = includeRemainingCountries
+      ? SUPPORTED_COUNTRIES.length
+      : Math.max(selectedCountries.length, 1);
+    return {
+      success: true,
+      runId: jobIds[0] ?? null,
+      message: `Triggered sequential scrape for all categories across all supported countries, prioritizing ${normalizedCountry}`,
+      startedAt,
+      priorityCountry: normalizedCountry,
+      selectedCountries,
+      scope: includeRemainingCountries ? 'all' : 'selected',
+      productLimit,
+      countryCount: effectiveCountryCount,
+      categoryCount: CATEGORY_KEYS.length,
+      totalJobs: effectiveCountryCount * CATEGORY_KEYS.length,
+      replacedActiveJobId: reset.activeJobId,
+      removedWaitingJobs: reset.removedWaitingJobs,
       jobIds,
     };
   });
@@ -103,7 +156,7 @@ export async function createServer() {
     async (request) => {
       const { category } = request.params;
       const { country = 'US' } = request.query;
-      const jobId = await triggerCategoryScrape(category, country, 50);
+      const jobId = await triggerCategoryScrape(category, country, DEFAULT_PRODUCT_LIMIT);
       return {
         success: true,
         message: `Triggered scrape for ${category} in ${country}`,
@@ -113,14 +166,16 @@ export async function createServer() {
   );
 
   // User: Real-time sync
-  app.post<{ Body: { category: string, country?: string } }>(
+  app.post<{ Body: { category: string, country?: string, productLimit?: number } }>(
     '/api/products/sync',
     async (request) => {
-      const { category, country = 'US' } = request.body;
-      const jobId = await triggerCategoryScrape(category, country, 50);
+      const { category, country = 'US', productLimit } = request.body;
+      const normalizedLimit = normalizeProductLimit(productLimit);
+      const jobId = await triggerCategoryScrape(category, country, normalizedLimit);
       return {
         success: true,
         message: `Syncing real-time records for ${category} in ${country}`,
+        productLimit: normalizedLimit,
         jobId,
       };
     }
@@ -146,6 +201,12 @@ export async function createServer() {
       message: 'Recurring schedule set up',
     };
   });
+
+  app.get('/api/meta/sync-config', async () => ({
+    defaultProductLimit: DEFAULT_PRODUCT_LIMIT,
+    productLimitOptions: PRODUCT_LIMIT_OPTIONS,
+    countries: SUPPORTED_COUNTRY_CONFIGS,
+  }));
 
   return { app, prisma };
 }

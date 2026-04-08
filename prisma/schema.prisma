@@ -16,6 +16,7 @@ model Product {
   productUrl      String   @map("product_url")
   primaryCategory String   @map("primary_category")
   subcategory     String?
+  priceLocal      Decimal? @map("price_local") @db.Decimal(10, 2)
   priceUsd        Decimal? @map("price_usd") @db.Decimal(10, 2)
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -35,6 +36,7 @@ model BsrSnapshot {
   category                String
   reviewCount             Int?     @map("review_count")
   rating                  Decimal? @db.Decimal(3, 2)
+  priceLocal               Decimal? @map("price_local") @db.Decimal(10, 2)
   priceUsd                Decimal? @map("price_usd") @db.Decimal(10, 2)
   estimatedMonthlySales   Int?     @map("estimated_monthly_sales")
   estimatedMonthlyRevenue Decimal? @map("estimated_monthly_revenue") @db.Decimal(12, 2)

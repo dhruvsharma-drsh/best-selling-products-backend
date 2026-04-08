@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { PrismaClient } from '@prisma/client';
 import { CATEGORY_CURVES } from '../../estimation/category-curves.js';
+import { getSequentialSyncProgress } from '../../queue/scrape-queue.js';
 
 interface CalibrationRecord {
   id: number;
@@ -244,6 +245,112 @@ export function registerAdminRoutes(app: FastifyInstance, prisma: PrismaClient) 
             maxSeconds: parseFloat(avgDuration[0].max_seconds),
           }
         : null,
+    };
+  });
+
+  /**
+   * GET /api/admin/scrape-jobs/progress?since=ISO_DATE
+   * Progress for the latest scrape batch, deduped by country/category pair.
+   */
+  app.get<{
+    Querystring: { since?: string };
+  }>('/api/admin/scrape-jobs/progress', async (request, reply) => {
+    const { since } = request.query;
+
+    if (!since) {
+      return reply.status(400).send({ error: 'Missing required query param: since' });
+    }
+
+    const sinceDate = new Date(since);
+    if (Number.isNaN(sinceDate.getTime())) {
+      return reply.status(400).send({ error: 'Invalid since timestamp' });
+    }
+
+    const sequential = getSequentialSyncProgress(since);
+    if (sequential) {
+      return sequential;
+    }
+
+    const [statusCounts, totals, countryCountRows, recentJobs] = await Promise.all([
+      prisma.$queryRaw<any[]>`
+        WITH batch_jobs AS (
+          SELECT DISTINCT ON (country, category_url)
+            country, category_url, status
+          FROM scrape_jobs
+          WHERE job_type = 'bestsellers_category'
+            AND created_at >= ${sinceDate}
+          ORDER BY country, category_url, created_at DESC
+        )
+        SELECT status, COUNT(*)::int as count
+        FROM batch_jobs
+        GROUP BY status
+        ORDER BY status
+      `,
+      prisma.$queryRaw<any[]>`
+        WITH batch_jobs AS (
+          SELECT DISTINCT ON (country, category_url)
+            country, category_url, status, products_found
+          FROM scrape_jobs
+          WHERE job_type = 'bestsellers_category'
+            AND created_at >= ${sinceDate}
+          ORDER BY country, category_url, created_at DESC
+        )
+        SELECT
+          COUNT(*)::int as started_jobs,
+          COALESCE(SUM(products_found), 0)::int as products_found
+        FROM batch_jobs
+      `,
+      prisma.$queryRaw<any[]>`
+        WITH batch_jobs AS (
+          SELECT DISTINCT ON (country, category_url)
+            country
+          FROM scrape_jobs
+          WHERE job_type = 'bestsellers_category'
+            AND created_at >= ${sinceDate}
+          ORDER BY country, created_at DESC
+        )
+        SELECT COUNT(*)::int as country_count
+        FROM batch_jobs
+      `,
+      prisma.$queryRaw<any[]>`
+        WITH batch_jobs AS (
+          SELECT DISTINCT ON (country, category_url)
+            id, country, category_url, status, products_found, error_message, created_at, completed_at
+          FROM scrape_jobs
+          WHERE job_type = 'bestsellers_category'
+            AND created_at >= ${sinceDate}
+          ORDER BY country, category_url, created_at DESC
+        )
+        SELECT *
+        FROM batch_jobs
+        ORDER BY created_at DESC
+        LIMIT 8
+      `,
+    ]);
+
+    const statusBreakdown = statusCounts.reduce(
+      (acc: Record<string, number>, row: any) => {
+        acc[row.status] = row.count;
+        return acc;
+      },
+      {}
+    );
+
+    return {
+      startedJobs: totals[0]?.started_jobs ?? 0,
+      productsFound: totals[0]?.products_found ?? 0,
+      countriesStarted: countryCountRows[0]?.country_count ?? 0,
+      statusBreakdown,
+      recentJobs: recentJobs.map((job: any) => ({
+        id: job.id,
+        country: job.country,
+        category: job.category_url,
+        status: job.status,
+        productsFound: job.products_found,
+        errorMessage: job.error_message,
+        createdAt: job.created_at,
+        completedAt: job.completed_at,
+      })),
     };
   });
 

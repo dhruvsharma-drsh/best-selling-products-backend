@@ -58,6 +58,13 @@ export const config = {
       .map((o) => o.trim())
       .filter(Boolean),
   },
+
+  /** Currency conversion API configuration */
+  currency: {
+    apiUrl: process.env.CURRENCY_API_URL || '',
+    apiKey: process.env.CURRENCY_API_KEY || '',
+    cacheTtlMs: parseInt(process.env.CURRENCY_CACHE_TTL_MS || '3600000', 10),
+  },
 } as const;
 
 // Re-export for backward compatibility

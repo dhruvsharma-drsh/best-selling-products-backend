@@ -1,5 +1,7 @@
 import * as cheerio from 'cheerio';
 import { CATEGORY_CURVES } from '../estimation/category-curves.js';
+import { SUPPORTED_COUNTRY_CONFIGS, SUPPORTED_COUNTRIES } from '../config/sync-config.js';
+export { SUPPORTED_COUNTRIES } from '../config/sync-config.js';
 
 export interface ScrapedProduct {
   asin: string;
@@ -21,6 +23,11 @@ export interface ScrapeRunOptions {
   setAbortController?: (controller: AbortController | null) => void;
 }
 
+interface HtmlFetchResult {
+  html: string | null;
+  statusCode?: number;
+}
+
 export class ScrapeCancelledError extends Error {
   constructor(message: string = 'Scrape stopped by user') {
     super(message);
@@ -28,34 +35,53 @@ export class ScrapeCancelledError extends Error {
   }
 }
 
-export const COUNTRY_DOMAINS: Record<string, string> = {
-  US: 'amazon.com',
-  UK: 'amazon.co.uk',
-  CA: 'amazon.ca',
-  DE: 'amazon.de',
-  FR: 'amazon.fr',
-  IT: 'amazon.it',
-  ES: 'amazon.es',
-  IN: 'amazon.in',
-  JP: 'amazon.co.jp',
-  AU: 'amazon.com.au',
-  AE: 'amazon.ae',
+export const COUNTRY_DOMAINS: Record<string, string> = SUPPORTED_COUNTRY_CONFIGS.reduce(
+  (acc, entry) => {
+    acc[entry.code] = entry.domain;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
+const COUNTRY_LOCALES: Record<string, string> = SUPPORTED_COUNTRY_CONFIGS.reduce(
+  (acc, entry) => {
+    acc[entry.code] = entry.locale;
+    return acc;
+  },
+  {} as Record<string, string>
+);
+
+const COUNTRY_ACCEPT_LANGUAGE_OVERRIDES: Record<string, string> = {
+  AE: 'en-AE,ar;q=0.9,en;q=0.5',
+  SA: 'ar-SA,ar;q=0.9,en;q=0.5',
+  BE: 'nl-BE,nl;q=0.9,fr;q=0.7,en;q=0.5',
 };
 
-// Country-specific Accept-Language headers to avoid geo-redirect issues
-const COUNTRY_LANG: Record<string, string> = {
-  US: 'en-US,en;q=0.9',
-  UK: 'en-GB,en;q=0.9',
-  CA: 'en-CA,en;q=0.9',
-  DE: 'de-DE,de;q=0.9,en;q=0.5',
-  FR: 'fr-FR,fr;q=0.9,en;q=0.5',
-  IT: 'it-IT,it;q=0.9,en;q=0.5',
-  ES: 'es-ES,es;q=0.9,en;q=0.5',
-  IN: 'en-IN,en;q=0.9',
-  JP: 'ja-JP,ja;q=0.9,en;q=0.5',
-  AU: 'en-AU,en;q=0.9',
-  AE: 'en-AE,ar;q=0.9,en;q=0.5',
-};
+function buildAcceptLanguage(locale?: string): string {
+  const normalizedLocale = locale?.trim().replace(/_/g, '-');
+  if (!normalizedLocale) {
+    return 'en-US,en;q=0.9';
+  }
+
+  const [language] = normalizedLocale.split('-');
+  if (!language) {
+    return 'en-US,en;q=0.9';
+  }
+
+  if (language.toLowerCase() === 'en') {
+    return `${normalizedLocale},en;q=0.9`;
+  }
+
+  return `${normalizedLocale},${language.toLowerCase()};q=0.9,en;q=0.5`;
+}
+
+export function getCountryAcceptLanguage(country: string): string {
+  const normalizedCountry = country.toUpperCase();
+  return (
+    COUNTRY_ACCEPT_LANGUAGE_OVERRIDES[normalizedCountry] ??
+    buildAcceptLanguage(COUNTRY_LOCALES[normalizedCountry])
+  );
+}
 
 /**
  * Country-specific bestseller category paths.
@@ -70,7 +96,8 @@ const COUNTRY_LANG: Record<string, string> = {
  *   - DE 'electronics' uses 'ce-de' (Consumer Electronics Deutschland)
  *   - IN has a few unique ones: 'car-motorbike', 'sports-fitness-and-outdoors'
  *
- * If a country is not listed, we fall back to the node ID approach.
+ * If a country is not listed, we try the other known working slugs for that
+ * category before falling back to generic paths.
  */
 const COUNTRY_CATEGORY_PATHS: Record<string, Record<string, string>> = {
   electronics: {
@@ -181,6 +208,53 @@ const COUNTRY_CATEGORY_PATH_ALIASES: Record<string, Record<string, string[]>> = 
   },
 };
 
+const CATEGORY_SLUG_VARIANTS: Record<string, string[]> = Object.fromEntries(
+  Object.entries(COUNTRY_CATEGORY_PATHS).map(([categoryKey, countryPaths]) => [
+    categoryKey,
+    Array.from(
+      new Set(
+        Object.values(countryPaths).filter(
+          (path): path is string => Boolean(path && path.trim())
+        )
+      )
+    ),
+  ])
+);
+
+export function getCategoryPathCandidates(categoryKey: string, country: string): string[] {
+  const normalizedCountry = country.toUpperCase();
+  const config = CATEGORY_CURVES[categoryKey];
+  const candidatePaths: string[] = [];
+  const seen = new Set<string>();
+
+  const addPath = (path?: string) => {
+    const normalizedPath = path?.trim().replace(/^\/+|\/+$/g, '');
+    if (!normalizedPath || seen.has(normalizedPath)) {
+      return;
+    }
+
+    seen.add(normalizedPath);
+    candidatePaths.push(normalizedPath);
+  };
+
+  addPath(COUNTRY_CATEGORY_PATHS[categoryKey]?.[normalizedCountry]);
+
+  for (const alias of COUNTRY_CATEGORY_PATH_ALIASES[normalizedCountry]?.[categoryKey] ?? []) {
+    addPath(alias);
+  }
+
+  for (const variant of CATEGORY_SLUG_VARIANTS[categoryKey] ?? []) {
+    addPath(variant);
+  }
+
+  addPath(categoryKey);
+
+  const usPath = config?.amazonUrl.match(/\/zgbs\/([^?#]+)/)?.[1];
+  addPath(usPath);
+
+  return candidatePaths;
+}
+
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -256,16 +330,10 @@ export class AmazonScraper {
       }
     };
 
-    // Strategy 1: Country-specific bestseller path (most reliable)
-    const countryPaths = COUNTRY_CATEGORY_PATHS[categoryKey];
-    const countryPath = countryPaths?.[country];
-    if (countryPath) {
-      addPathUrl(countryPath);
-    }
-
-    const countryAliases = COUNTRY_CATEGORY_PATH_ALIASES[country]?.[categoryKey] ?? [];
-    for (const alias of countryAliases) {
-      addPathUrl(alias);
+    // Strategy 1: Targeted country slug first, then other known working slugs
+    // for the same category so newly added countries inherit proven paths.
+    for (const path of getCategoryPathCandidates(categoryKey, country)) {
+      addPathUrl(path);
     }
 
     // Strategy 2: US-derived zgbs path (works for US, sometimes for other English-speaking countries)
@@ -277,29 +345,13 @@ export class AmazonScraper {
       }
     }
 
-    // Strategy 3: Try the category key itself as a slug (works surprisingly often)
-    if (categoryKey !== countryPath) {
-      addPathUrl(categoryKey);
-    }
-
-    // Strategy 4: Node ID based URL (works only on the intended domain, typically US)
+    // Strategy 3: Node ID based URL (works only on the intended domain, typically US)
     if (nodeId && country === 'US') {
       if (pageNum === 1) {
         urls.push(`https://www.${tld}/gp/bestsellers/?node=${nodeId}`);
         urls.push(`https://www.${tld}/gp/bestsellers/ref=zg_bs_unv_${categoryKey}_0_${nodeId}_1?node=${nodeId}`);
       } else {
         urls.push(`https://www.${tld}/gp/bestsellers/?node=${nodeId}&pg=${pageNum}`);
-      }
-    }
-
-    // Strategy 5: Extract path from US URL and try on target domain (fallback)
-    if (country !== 'US' && config) {
-      const zgbsMatch = config.amazonUrl.match(/\/zgbs\/([^?#]+)/);
-      if (zgbsMatch) {
-        const usPath = zgbsMatch[1].replace(/\/$/, '');
-        if (usPath !== countryPath && usPath !== categoryKey) {
-          addPathUrl(usPath);
-        }
       }
     }
 
@@ -313,9 +365,9 @@ export class AmazonScraper {
     url: string,
     country: string = 'US',
     options: ScrapeRunOptions = {}
-  ): Promise<string | null> {
+  ): Promise<HtmlFetchResult> {
     const maxRetries = 3;
-    const lang = COUNTRY_LANG[country] || 'en-US,en;q=0.9';
+    const lang = getCountryAcceptLanguage(country);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
@@ -347,11 +399,14 @@ export class AmazonScraper {
 
         if (!res.ok) {
           console.warn(`  HTTP ${res.status} fetching ${url} (attempt ${attempt}/${maxRetries})`);
+          if (res.status === 400 || res.status === 404) {
+            return { html: null, statusCode: res.status };
+          }
           if (attempt < maxRetries) {
             await randomDelay(2000 * attempt, 4000 * attempt, options.shouldStop);
             continue;
           }
-          return null;
+          return { html: null, statusCode: res.status };
         }
 
         const html = await res.text();
@@ -363,7 +418,7 @@ export class AmazonScraper {
             await randomDelay(3000 * attempt, 6000 * attempt, options.shouldStop);
             continue;
           }
-          return null;
+          return { html: null };
         }
 
         // Check for empty/redirect page
@@ -375,7 +430,7 @@ export class AmazonScraper {
           }
         }
 
-        return html;
+        return { html };
       } catch (err) {
         options.setAbortController?.(null);
         if (options.shouldStop?.()) {
@@ -386,10 +441,10 @@ export class AmazonScraper {
           await randomDelay(2000 * attempt, 5000 * attempt, options.shouldStop);
           continue;
         }
-        return null;
+        return { html: null };
       }
     }
-    return null;
+    return { html: null };
   }
 
   /**
@@ -402,6 +457,33 @@ export class AmazonScraper {
   ): Promise<string | null> {
     // Lazy-check if Playwright is available
     if (this.playwrightAvailable === false) return null;
+
+    let context: any = null;
+    let page: any = null;
+    const controller = new AbortController();
+    const closeActiveSession = () => {
+      if (page && !page.isClosed()) {
+        void page.close().catch(() => {});
+      }
+      if (context) {
+        void context.close().catch(() => {});
+      }
+    };
+    const cleanup = async () => {
+      options.setAbortController?.(null);
+      controller.signal.removeEventListener('abort', closeActiveSession);
+
+      if (page && !page.isClosed()) {
+        await page.close().catch(() => {});
+      }
+
+      if (context) {
+        await context.close().catch(() => {});
+      }
+    };
+
+    controller.signal.addEventListener('abort', closeActiveSession, { once: true });
+    options.setAbortController?.(controller);
 
     try {
       this.throwIfStopped(options.shouldStop);
@@ -418,8 +500,8 @@ export class AmazonScraper {
         this.playwrightAvailable = true;
       }
 
-      const lang = COUNTRY_LANG[country] || 'en-US,en;q=0.9';
-      const context = await this.browser.newContext({
+      const lang = getCountryAcceptLanguage(country);
+      context = await this.browser.newContext({
         userAgent: randomUA(),
         viewport: { width: 1366, height: 768 },
         locale: lang.split(',')[0].split('-').join('-'),
@@ -429,7 +511,7 @@ export class AmazonScraper {
         },
       });
 
-      const page = await context.newPage();
+      page = await context.newPage();
       await page.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
       });
@@ -441,19 +523,24 @@ export class AmazonScraper {
       const isCaptcha = await page.$('form[action="/errors/validateCaptcha"]');
       if (isCaptcha) {
         console.warn(`  CAPTCHA detected via Playwright for ${url}`);
-        await context.close();
+        await cleanup();
         return null;
       }
 
       const html = await page.content();
-      await context.close();
+      await cleanup();
       return html;
     } catch (err) {
+      if (controller.signal.aborted || options.shouldStop?.()) {
+        await cleanup();
+        throw new ScrapeCancelledError();
+      }
       console.warn(`  Playwright fetch failed for ${url}:`, (err as Error).message);
       if ((err as Error).message.includes("Executable doesn't exist")) {
         this.playwrightAvailable = false;
         console.warn('  Playwright browsers not installed — run `npx playwright install chromium`');
       }
+      await cleanup();
       return null;
     }
   }
@@ -466,6 +553,7 @@ export class AmazonScraper {
     country: string,
     options: ScrapeRunOptions = {}
   ): Promise<{ html: string; url: string } | null> {
+    const isPaginatedRequest = urls.some((url) => /\bpg=\d+\b|zg_bs_pg_\d+/.test(url));
     const isValidPage = (h: string) => {
       if (h.length < 5000) return false;
       // Check for category-not-found message (JP returns this for invalid slugs)
@@ -481,18 +569,29 @@ export class AmazonScraper {
       return hasDataAsin || hasDpLinks;
     };
 
+    let allHttpFailuresWereMissingPages = isPaginatedRequest;
+
     for (const url of urls) {
       console.log(`    ↳ Trying: ${url}`);
 
       // Try HTTP first
       this.throwIfStopped(options.shouldStop);
-      let html = await this.fetchHtml(url, country, options);
-      if (html && isValidPage(html)) {
-        return { html, url };
+      const result = await this.fetchHtml(url, country, options);
+      if (result.html && isValidPage(result.html)) {
+        return { html: result.html, url };
+      }
+
+      if (result.statusCode !== 400 && result.statusCode !== 404) {
+        allHttpFailuresWereMissingPages = false;
       }
 
       // Small delay between URL attempts
       await randomDelay(1000, 2000, options.shouldStop);
+    }
+
+    if (allHttpFailuresWereMissingPages) {
+      console.log('    Skipping Playwright fallback because this bestseller page does not exist.');
+      return null;
     }
 
     // Last resort: try Playwright on all URLs
@@ -541,6 +640,10 @@ export class AmazonScraper {
 
       if (!result) {
         console.warn(`  ⚠ Could not fetch ${categoryKey} page ${pageNum} from any URL. Skipping.`);
+        if (pageNum > 1) {
+          console.warn(`  Stopping pagination for ${categoryKey} (${countryUp}) because page ${pageNum} is unavailable.`);
+          break;
+        }
         continue;
       }
 
@@ -548,6 +651,12 @@ export class AmazonScraper {
 
       const pageProducts = this.parseProductsFromHtml(result.html, categoryKey, pageNum, countryUp, tld);
       console.log(`  📦 Parsed ${pageProducts.length} products from ${categoryKey} page ${pageNum}`);
+
+      if (pageProducts.length === 0) {
+        console.warn(`  Stopping pagination for ${categoryKey} (${countryUp}) because page ${pageNum} returned no products.`);
+        break;
+      }
+
       products.push(...pageProducts);
 
       if (products.length >= maxProducts) {
