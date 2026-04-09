@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import {
   estimateMonthlySales,
   calculateBsrStabilityScore,
@@ -35,6 +35,12 @@ interface ProductRecord {
   priceUsd: { toString(): string } | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+interface ProductBsrStats {
+  stabilityScore: number | null;
+  peakBsr: number | null;
+  avgBsr: number | null;
 }
 
 export interface ProductQueryParams {
@@ -254,8 +260,61 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
 
         const total = parseInt(totalResult[0]?.count ?? '0');
 
+        const asins = results
+          .map((result) => result.asin)
+          .filter((asin): asin is string => typeof asin === 'string' && asin.length > 0);
+        const bsrStatsByAsin = new Map<string, ProductBsrStats>();
+
+        if (asins.length > 0) {
+          const historyRows = await prisma.$queryRaw<Array<{ asin: string; bsr_category: number }>>(
+            Prisma.sql`
+              SELECT asin, bsr_category
+              FROM bsr_snapshots
+              WHERE country = ${country}
+                AND asin IN (${Prisma.join(asins)})
+                AND time >= NOW() - INTERVAL '30 days'
+              ORDER BY asin ASC, time ASC
+            `
+          );
+
+          const historyByAsin = new Map<string, number[]>();
+
+          for (const row of historyRows) {
+            if (!row.asin || row.bsr_category == null) {
+              continue;
+            }
+
+            const history = historyByAsin.get(row.asin) ?? [];
+            history.push(Number(row.bsr_category));
+            historyByAsin.set(row.asin, history);
+          }
+
+          for (const asin of asins) {
+            const history = historyByAsin.get(asin) ?? [];
+
+            bsrStatsByAsin.set(asin, {
+              stabilityScore:
+                history.length > 0 ? calculateBsrStabilityScore(history) : null,
+              peakBsr: history.length > 0 ? Math.min(...history) : null,
+              avgBsr:
+                history.length > 0
+                  ? Math.round(
+                      history.reduce((sum, bsr) => sum + bsr, 0) / history.length
+                    )
+                  : null,
+            });
+          }
+        }
+
+        const formattedProducts = [];
+        for (const result of results) {
+          formattedProducts.push(
+            await formatProduct(result, bsrStatsByAsin.get(result.asin))
+          );
+        }
+
         return {
-          data: results.map(formatProduct),
+          data: formattedProducts,
           meta: {
             total,
             page: pageNum,
@@ -568,11 +627,27 @@ export function registerProductRoutes(app: FastifyInstance, prisma: PrismaClient
   });
 }
 
-function formatProduct(raw: any) {
+async function formatProduct(raw: any, bsrStats?: ProductBsrStats) {
   const rawLocalPrice = raw.price_local ? parseFloat(raw.price_local) : null;
   const rawUsdPrice = raw.price_usd ? parseFloat(raw.price_usd) : null;
   const country = raw.country || 'US';
   const currencyInfo = getCountryCurrency(country);
+  let displayLocalPrice =
+    rawLocalPrice ?? (currencyInfo.code === 'USD' ? rawUsdPrice : null);
+
+  if (displayLocalPrice == null && rawUsdPrice != null && currencyInfo.code !== 'USD') {
+    try {
+      const reverseConversion = await convertUsdToLocalDetailed(rawUsdPrice, country);
+      if (reverseConversion.amount != null) {
+        displayLocalPrice = reverseConversion.amount;
+      }
+    } catch (error) {
+      console.warn(
+        `Failed to derive local price for list view ${raw.asin}/${country}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
 
   return {
     rank: parseInt(raw.rank),
@@ -588,7 +663,10 @@ function formatProduct(raw: any) {
     estimatedMonthlyRevenue: raw.estimated_monthly_revenue
       ? parseFloat(raw.estimated_monthly_revenue)
       : null,
-    priceLocal: rawLocalPrice,
+    stabilityScore: bsrStats?.stabilityScore ?? null,
+    peakBsr: bsrStats?.peakBsr ?? null,
+    avgBsr: bsrStats?.avgBsr ?? null,
+    priceLocal: displayLocalPrice,
     priceUsd: rawUsdPrice,
     priceCurrency: {
       code: currencyInfo.code,
